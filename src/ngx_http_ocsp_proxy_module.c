@@ -406,7 +406,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     dst->hashAlgorithm->algorithm->data = (const u_char *)data1;
 
     if (src->hashAlgorithm->algorithm->sn && ngx_strlen(src->hashAlgorithm->algorithm->sn) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn));
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn) + 1);
         if (data2 == NULL) {
             return NGX_ERROR;
         }
@@ -416,7 +416,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     }
 
     if (src->hashAlgorithm->algorithm->ln && ngx_strlen(src->hashAlgorithm->algorithm->ln) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln));
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln) + 1);
         if (data2 == NULL) {
             return NGX_ERROR;
         }

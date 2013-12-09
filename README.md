@@ -38,7 +38,6 @@ Example configuration
 
     upstream my_memcached {
         server 127.0.0.1:11211;
-#            keepalive 32;
     }
 
     server {
@@ -59,7 +58,7 @@ Example configuration
             ocsp_proxy on;
             set $key $ocsp_serial;
 
-            srcache_methods POST;
+            srcache_methods GET POST;
 
             srcache_fetch GET /memc key=$key;
             srcache_fetch_skip $ocsp_response_skip_caching;

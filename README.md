@@ -57,6 +57,7 @@ Example configuration
             set $memc_exptime $arg_exptime;
 
             memc_pass my_memcached;
+            memc_ignore_client_abort on;
         }
 
         location / { 

@@ -9,6 +9,11 @@ Status
 
 Working alpha
 
+Note
+====
+
+If you're not an CA owner with a lot of legacy clients - forget about this module and use [OCSP stapling](http://en.wikipedia.org/wiki/OCSP_stapling) instead.
+
 Installation
 ============
 
@@ -65,8 +70,7 @@ Example configuration
 
             srcache_store PUT /memc key=$key&exptime=$ocsp_response_cache_time;
             srcache_store_statuses 200;
-
-            srcache_store_skip_body $ocsp_response_skip_caching;
+            srcache_store_skip $ocsp_response_skip_caching;
             srcache_store_hide_header Date;
 
             proxy_pass http://ocsp.someca.com;

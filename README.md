@@ -92,7 +92,9 @@ TODO
 ====
 
 *   Code review
+*   Add $ocsp_request variable and rewrite POST to GET, so we can use nginx internal caching
 *   Testing
+*   Load testing
 
 Bugs
 ====

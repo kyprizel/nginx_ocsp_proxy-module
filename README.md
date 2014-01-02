@@ -86,6 +86,8 @@ Sources
 Available on github at [/kyprizel/nginx_ocsp_proxy-module](https://github.com/kyprizel/nginx_ocsp_proxy-module).
 Most POST processing code was borrowed from [form-input-nginx-module](https://github.com/calio/form-input-nginx-module).
 
+[![Analytics](https://ga-beacon.appspot.com/UA-559211-28/nginx_ocsp_proxy-module/README)](https://github.com/igrigorik/ga-beacon)
+
 TODO
 ====
 

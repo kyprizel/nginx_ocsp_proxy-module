@@ -76,6 +76,7 @@ static ngx_str_t  ngx_http_ocsp_serial = ngx_string("ocsp_serial");
 static ngx_str_t  ngx_http_ocsp_skip_caching = ngx_string("ocsp_response_skip_caching");
 static ngx_str_t  ngx_http_ocsp_delta = ngx_string("ocsp_response_cache_time");
 
+
 static ngx_command_t  ngx_http_ocsp_proxy_filter_commands[] = {
     { ngx_string("ocsp_proxy"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
@@ -122,7 +123,7 @@ ngx_module_t  ngx_http_ocsp_proxy_filter_module = {
 static ngx_int_t
 ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
 {
-    ngx_http_ocsp_proxy_conf_t  *conf;
+    ngx_http_ocsp_proxy_conf_t      *conf;
     ngx_http_ocsp_proxy_ctx_t       *ctx;
     u_char                          *p, *last, *start, *dst, *src;
     ngx_str_t                        value;
@@ -157,7 +158,7 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
     ngx_http_set_ctx(r, ctx, ngx_http_ocsp_proxy_filter_module);
 
     if (r->method == NGX_HTTP_GET) {
-        /* Some browsers (IE, Chromium, Opera) use GET */
+        /* Some browsers using MS CryptoAPI (IE, Chromium, Opera) use GET */
         p = start = &r->unparsed_uri.data[0];
         last = r->unparsed_uri.data + r->unparsed_uri.len;
 
@@ -977,7 +978,7 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_ocsp_proxy_conf_t *prev = parent;
     ngx_http_ocsp_proxy_conf_t *conf = child;
 
-    ngx_conf_merge_value(conf->enable, prev->enable, NGX_CONF_UNSET);
+    ngx_conf_merge_value(conf->enable, prev->enable, 0);
 
     return NGX_CONF_OK;
 }

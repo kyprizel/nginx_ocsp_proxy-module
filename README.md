@@ -105,7 +105,7 @@ or using [github's issue tracker](https://github.com/kyprizel/nginx_ocsp_proxy-m
 Copyright & License
 ===================
 
-Copyright (c) 2013, Eldar Zaitov
+Copyright (c) 2013-2014, Eldar Zaitov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,

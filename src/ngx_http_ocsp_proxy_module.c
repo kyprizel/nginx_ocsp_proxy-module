@@ -1,11 +1,11 @@
 /*
-    v0.01
+    v0.02
 
-    Copyright (C) 2013 Eldar Zaitov (eldar@kyprizel.net).
+    Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
     This module is licenced under the terms of BSD license.
-*/
 
+*/
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
@@ -76,7 +76,6 @@ static ngx_str_t  ngx_http_ocsp_serial = ngx_string("ocsp_serial");
 static ngx_str_t  ngx_http_ocsp_skip_caching = ngx_string("ocsp_response_skip_caching");
 static ngx_str_t  ngx_http_ocsp_delta = ngx_string("ocsp_response_cache_time");
 
-
 static ngx_command_t  ngx_http_ocsp_proxy_filter_commands[] = {
     { ngx_string("ocsp_proxy"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
@@ -123,7 +122,7 @@ ngx_module_t  ngx_http_ocsp_proxy_filter_module = {
 static ngx_int_t
 ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
 {
-    ngx_http_ocsp_proxy_conf_t      *conf;
+    ngx_http_ocsp_proxy_conf_t  *conf;
     ngx_http_ocsp_proxy_ctx_t       *ctx;
     u_char                          *p, *last, *start, *dst, *src;
     ngx_str_t                        value;
@@ -158,7 +157,7 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
     ngx_http_set_ctx(r, ctx, ngx_http_ocsp_proxy_filter_module);
 
     if (r->method == NGX_HTTP_GET) {
-        /* Some browsers using MS CryptoAPI (IE, Chromium, Opera) use GET */
+        /* Some browsers (IE, Chromium, Opera) use GET */
         p = start = &r->unparsed_uri.data[0];
         last = r->unparsed_uri.data + r->unparsed_uri.len;
 
@@ -407,7 +406,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     dst->hashAlgorithm->algorithm->data = (const u_char *)data1;
 
     if (src->hashAlgorithm->algorithm->sn && ngx_strlen(src->hashAlgorithm->algorithm->sn) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn) + 1);
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn));
         if (data2 == NULL) {
             return NGX_ERROR;
         }
@@ -417,7 +416,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     }
 
     if (src->hashAlgorithm->algorithm->ln && ngx_strlen(src->hashAlgorithm->algorithm->ln) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln) + 1);
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln));
         if (data2 == NULL) {
             return NGX_ERROR;
         }
@@ -486,7 +485,7 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
     OCSP_CERTID         *cid = NULL;
     BIGNUM              *bnser = NULL;
     char                *serial = NULL;
-    int                 req_idx;
+
 
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "process_ocsp_request");
 
@@ -510,17 +509,6 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "OCSP request format error");
         goto error;
-    }
-
-
-    /* Check for nonce in request */
-    req_idx = OCSP_REQUEST_get_ext_by_NID(ocsp, NID_id_pkix_OCSP_Nonce, -1);
-    if (req_idx >= 0) {
-        /* If there is nonce - we should not cache response on this request or answer with already cached response */
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "got OCSP request with nonce");
-
-        ctx->skip_caching = 1;
     }
 
     inf = ocsp->tbsRequest;
@@ -857,6 +845,17 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
         goto error;
     }
 
+    /* Check for nonce in response */
+    n = OCSP_BASICRESP_get_ext_by_NID(basic, NID_id_pkix_OCSP_Nonce, -1);
+    if (n >= 0) {
+        /* If there is nonce - we should not cache the response */
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "got OCSP response with nonce");
+
+        ctx->skip_caching = 1;
+        goto error;
+    }
+
     if (OCSP_resp_find_status(basic, ctx->cid, &n, NULL, NULL,
                               &thisupdate, &nextupdate)
         != 1)
@@ -880,6 +879,7 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
                       "OCSP_check_validity() failed");
         goto error;
     }
+
 
     now = ngx_time();
     t_tmp = ASN1_GetTimeT(nextupdate);
@@ -978,7 +978,7 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_ocsp_proxy_conf_t *prev = parent;
     ngx_http_ocsp_proxy_conf_t *conf = child;
 
-    ngx_conf_merge_value(conf->enable, prev->enable, 0);
+    ngx_conf_merge_value(conf->enable, prev->enable, NGX_CONF_UNSET);
 
     return NGX_CONF_OK;
 }

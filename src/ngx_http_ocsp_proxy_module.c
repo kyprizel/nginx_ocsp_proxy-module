@@ -122,7 +122,7 @@ ngx_module_t  ngx_http_ocsp_proxy_filter_module = {
 static ngx_int_t
 ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
 {
-    ngx_http_ocsp_proxy_conf_t  *conf;
+    ngx_http_ocsp_proxy_conf_t      *conf;
     ngx_http_ocsp_proxy_ctx_t       *ctx;
     u_char                          *p, *last, *start, *dst, *src;
     ngx_str_t                        value;
@@ -157,7 +157,7 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
     ngx_http_set_ctx(r, ctx, ngx_http_ocsp_proxy_filter_module);
 
     if (r->method == NGX_HTTP_GET) {
-        /* Some browsers (IE, Chromium, Opera) use GET */
+        /* Some browsers using MS CryptoAPI (IE, Chromium, Opera) use GET */
         p = start = &r->unparsed_uri.data[0];
         last = r->unparsed_uri.data + r->unparsed_uri.len;
 
@@ -406,7 +406,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     dst->hashAlgorithm->algorithm->data = (const u_char *)data1;
 
     if (src->hashAlgorithm->algorithm->sn && ngx_strlen(src->hashAlgorithm->algorithm->sn) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn));
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->sn) + 1);
         if (data2 == NULL) {
             return NGX_ERROR;
         }
@@ -416,7 +416,7 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
     }
 
     if (src->hashAlgorithm->algorithm->ln && ngx_strlen(src->hashAlgorithm->algorithm->ln) > 0) {
-        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln));
+        data2 = (char *) ngx_pcalloc(r->pool, ngx_strlen(src->hashAlgorithm->algorithm->ln) + 1);
         if (data2 == NULL) {
             return NGX_ERROR;
         }
@@ -978,7 +978,7 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_ocsp_proxy_conf_t *prev = parent;
     ngx_http_ocsp_proxy_conf_t *conf = child;
 
-    ngx_conf_merge_value(conf->enable, prev->enable, NGX_CONF_UNSET);
+    ngx_conf_merge_value(conf->enable, prev->enable, 0);
 
     return NGX_CONF_OK;
 }

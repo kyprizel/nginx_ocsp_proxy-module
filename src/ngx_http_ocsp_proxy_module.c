@@ -23,7 +23,7 @@
 
 typedef struct {
     ngx_flag_t                  enable;
-    ngx_msec_t                  max_cache_time;
+    time_t                      max_cache_time;
 } ngx_http_ocsp_proxy_conf_t;
 
 
@@ -32,7 +32,7 @@ typedef struct {
     ngx_str_t       serial;
     ngx_str_t       ocsp_request;
     unsigned        valid;
-    ngx_msec_t      delta;
+    time_t          delta;
     unsigned        done:1;
     unsigned        waiting_more_body:1;
     unsigned        skip_caching;
@@ -84,7 +84,7 @@ static ngx_command_t  ngx_http_ocsp_proxy_filter_commands[] = {
 
     { ngx_string("ocsp_cache_timeout"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_msec_slot,
+      ngx_conf_set_sec_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_ocsp_proxy_conf_t, max_cache_time),
       NULL },
@@ -154,6 +154,9 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
         return NGX_DECLINED;
     }
 
+    /*
+        ctx->state = 0
+    */
     ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_ocsp_proxy_ctx_t));
     if (ctx == NULL) {
         return NGX_ERROR;
@@ -206,7 +209,9 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
         ngx_memcpy(ctx->ocsp_request.data, rreq.data, rreq.len);
         ctx->ocsp_request.len = rreq.len;
 
-        /* handle ocsp req here */
+        ctx->state = 1;
+
+        /* parse OCSP request here */
         if (process_ocsp_request(r, rreq.data, rreq.len) != NGX_OK) {
             return rc;
         }
@@ -296,7 +301,7 @@ ngx_http_ocsp_request_get_skip_caching_variable(ngx_http_request_t *r,
 #endif
 
     switch (ctx->state) {
-    case 0:
+    case 1:
         v->data = (u_char *) ngx_pcalloc(r->pool, 1);
         if (v->data == NULL) {
             return NGX_ERROR;
@@ -309,7 +314,7 @@ ngx_http_ocsp_request_get_skip_caching_variable(ngx_http_request_t *r,
         }
         v->len = 1;
         break;
-    case 1:
+    case 2:
         v->data = (u_char *) ngx_pcalloc(r->pool, 1);
         if (v->data == NULL) {
             return NGX_ERROR;
@@ -323,7 +328,10 @@ ngx_http_ocsp_request_get_skip_caching_variable(ngx_http_request_t *r,
         v->len = 1;
         break;
     default:
-        /* wtf? unknown state? */
+        /* 
+            wtf? unknown state?
+            invalid OCSP request
+        */
         v->not_found = 1;
         return NGX_OK;
     }
@@ -369,9 +377,9 @@ ngx_http_ocsp_request_get_delta_variable(ngx_http_request_t *r,
     }
 
     if (ctx->delta > conf->max_cache_time) {
-        v->len = ngx_sprintf(v->data, "%T", (time_t) conf->max_cache_time / 1000) - v->data;
+        v->len = ngx_sprintf(v->data, "%T", conf->max_cache_time) - v->data;
     } else {
-        v->len = ngx_sprintf(v->data, "%T", (time_t) ctx->delta / 1000) - v->data;
+        v->len = ngx_sprintf(v->data, "%T", ctx->delta) - v->data;
     }
 
 complete:
@@ -648,13 +656,15 @@ ngx_http_ocsp_proxy_process_post_body(ngx_http_request_t *r) {
         return NGX_ERROR;
     }
 
-    if (r->method != NGX_HTTP_POST) {
+    if (r->method != NGX_HTTP_POST || ctx->state != 0) {
         return NGX_ERROR;
     }
 
     if (r->request_body == NULL || r->request_body->bufs == NULL) {
         return NGX_ERROR;
     }
+
+    ctx->state = 1;
 
     if (r->request_body->bufs->next != NULL) {
         /* more than one buffer...we should copy the data out... */
@@ -737,9 +747,12 @@ ngx_http_ocsp_request_get_b64encoded_variable(ngx_http_request_t *r,
         goto complete;
     }
 
-    if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
-        v->not_found = 1;
-        return NGX_OK;
+    /* process POST body only once */
+    if (ctx->state == 0) {
+        if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
+            v->not_found = 1;
+            return NGX_OK;
+        }
     }
 
 complete:
@@ -803,9 +816,12 @@ ngx_http_ocsp_request_get_serial_variable(ngx_http_request_t *r,
         goto complete;
     }
 
-    if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
-        v->not_found = 1;
-        return NGX_OK;
+    /* process POST body only once */
+    if (ctx->state == 0) {
+        if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
+            v->not_found = 1;
+            return NGX_OK;
+        }
     }
 
     if (process_ocsp_request(r, ctx->ocsp_request.data, ctx->ocsp_request.len) != NGX_OK) {
@@ -881,7 +897,7 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
     OCSP_RESPONSE               *ocsp;
     OCSP_BASICRESP              *basic;
     ASN1_GENERALIZEDTIME        *thisupdate, *nextupdate;
-    time_t                      now, t_tmp;
+    time_t                      now, t_tmp, timedelta;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_proxy_handle_response");
 
@@ -942,7 +958,7 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
     len = last-buf;
     d = buf;
 
-    ctx->state = 1;
+    ctx->state = 2;
 
     ocsp = d2i_OCSP_RESPONSE(NULL, &d, len);
     if (ocsp == NULL) {
@@ -1016,11 +1032,11 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
             goto error;
         }
 
-        delta = delta * -1 * 1000;
-        if ((ngx_msec_t) delta > conf->max_cache_time) {
-            ctx->delta = conf->max_cache_time;
+        timedelta = (time_t) (delta * -1);
+        if (timedelta > conf->max_cache_time) {
+            timedelta = conf->max_cache_time;
         }
-        ctx->delta = (ngx_msec_t) delta;
+        ctx->delta = timedelta;
     } else {
         ctx->delta = conf->max_cache_time;
     }
@@ -1099,7 +1115,7 @@ ngx_http_ocsp_proxy_create_conf(ngx_conf_t *cf)
      */
 
     conf->enable = NGX_CONF_UNSET;
-    conf->max_cache_time = NGX_CONF_UNSET_MSEC;
+    conf->max_cache_time = NGX_CONF_UNSET;
 
     return conf;
 }
@@ -1114,8 +1130,8 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
 
     /* default max_cache_time = 3600 * 24 * 7 */
-    ngx_conf_merge_msec_value(conf->max_cache_time,
-                              prev->max_cache_time, 604800 * 1000);
+    ngx_conf_merge_value(conf->max_cache_time,
+                              prev->max_cache_time, 604800);
 
     return NGX_CONF_OK;
 }

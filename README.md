@@ -14,29 +14,81 @@ Note
 
 If you're not an CA owner with a lot of legacy clients - forget about this module and use [OCSP stapling](http://en.wikipedia.org/wiki/OCSP_stapling) instead.
 
-Installation
-============
+Directives
+==========
 
-Grab the nginx source code from [nginx.org](http://nginx.org/), for example, the version 1.5.7 (see nginx compatibility).
-Grab [srcache-nginx-module](https://github.com/agentzh/srcache-nginx-module) and [memc-nginx-module](https://github.com/agentzh/memc-nginx-module).
-Build the source with this module:
+ocsp_proxy
+----------
+**syntax:** *ocsp_proxy (on|off);*
 
-    wget 'http://nginx.org/download/nginx-1.5.7.tar.gz'
-    tar -xzvf nginx-1.5.7.tar.gz
-    cd nginx-1.5.7/
-    ./configure --with-debug --add-module=/path/to/srcache-nginx-module \
-                        --add-module=/path/to/memc-nginx-module \
-                        --add-module=/path/to/nginx_ocsp_proxy-module
+**default:** *off*
 
-    make
-    make install
+**context:** *http, server, location, if*
 
-Modules order does matter!
+on - Enable module and GET/POST request processing
 
-Compatibility
-=============
+off - Disable module
 
-Module was tested with nginx 1.5+, but should work with 1.4+.
+ocsp_cache_timeout
+------------------
+**syntax:** *ocsp_cache_timeout 7d;*
+
+**default:** *7 days*
+
+**context:** *http, server, location, if*
+
+Maximum cache time for OCSP response.
+
+
+Variables
+=========
+
+ocsp_request
+------------
+
+Base64 encoded OCSP request body.
+Can be used for POST to GET rewrite.
+
+ocsp_serial
+-----------
+
+Certificate serial
+
+ocsp_skip_cache
+---------------
+
+If set on request:
+
+    1 - no cached response should be sent
+
+    Will be set to 1 in case of:
+
+    * Nonce found in reqest
+
+If set on response:
+
+    0 - response can be cached
+
+    1 - response can not be cached
+
+    Will be set to 1 in case of:
+
+    * Nonce found in response
+
+    * Service Locator extension found in request
+
+
+
+ocsp_response_cache_time
+------------------------
+
+Cache time for specific response.
+
+Can't be more than ocsp_cache_timeout.
+
+Will be set to 0 if ocsp_skip_cache set to 1.
+0 means FOREVER in memcached, so don't forget to configure store_skip correctly!
+
 
 Example configuration
 =====================
@@ -67,17 +119,43 @@ Example configuration
             srcache_methods GET POST;
 
             srcache_fetch GET /memc key=$key;
-            srcache_fetch_skip $ocsp_response_skip_caching;
+            srcache_fetch_skip $ocsp_skip_cache;
 
             srcache_store PUT /memc key=$key&exptime=$ocsp_response_cache_time;
             srcache_store_statuses 200;
-            srcache_store_skip $ocsp_response_skip_caching;
+            srcache_store_skip $ocsp_skip_cache;
             srcache_store_hide_header Date;
 
             proxy_pass http://ocsp.someca.com;
             proxy_ignore_client_abort on;
         }
     }
+
+
+
+Installation
+============
+
+Grab the nginx source code from [nginx.org](http://nginx.org/), for example, the version 1.5.8 (see nginx compatibility).
+Grab [srcache-nginx-module](https://github.com/agentzh/srcache-nginx-module) and [memc-nginx-module](https://github.com/agentzh/memc-nginx-module).
+Build the source with this module:
+
+    wget 'http://nginx.org/download/nginx-1.5.8.tar.gz'
+    tar -xzvf nginx-1.5.8.tar.gz
+    cd nginx-1.5.8/
+    ./configure --with-debug --add-module=/path/to/srcache-nginx-module \
+                        --add-module=/path/to/memc-nginx-module \
+                        --add-module=/path/to/nginx_ocsp_proxy-module
+
+    make
+    make install
+
+Modules order does matter!
+
+Compatibility
+=============
+
+Module was tested with nginx 1.5+, but should work with 1.4+.
 
 
 Sources
@@ -92,9 +170,9 @@ TODO
 ====
 
 *   Code review
-*   Add $ocsp_request variable and rewrite POST to GET, so we can use nginx internal caching
 *   Testing
 *   Load testing
+*   OCSP Response validation with CA cert
 
 Bugs
 ====

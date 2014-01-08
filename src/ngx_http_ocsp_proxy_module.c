@@ -1,5 +1,5 @@
 /*
-    v0.02
+    v0.03
 
     Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
@@ -18,26 +18,21 @@
 
 #define DDEBUG 0
 
-/*
-    max cache time = 30 days
-    XXX: move it to config?
-*/
-#define max_cache_time 2592000
-#define max_cache_time_len 7
-
 /* response valid lag buffer time */
 #define TIME_BUF 300
 
 typedef struct {
     ngx_flag_t                  enable;
+    ngx_msec_t                  max_cache_time;
 } ngx_http_ocsp_proxy_conf_t;
 
 
 typedef struct {
     OCSP_CERTID     *cid;
     ngx_str_t       serial;
+    ngx_str_t       ocsp_request;
     unsigned        valid;
-    int             delta;
+    ngx_msec_t      delta;
     unsigned        done:1;
     unsigned        waiting_more_body:1;
     unsigned        skip_caching;
@@ -53,7 +48,8 @@ static ngx_int_t
 copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src);
 static ngx_int_t
 process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len);
-
+static ngx_int_t
+ngx_http_ocsp_proxy_process_post_body(ngx_http_request_t *r);
 
 static ngx_int_t ngx_http_ocsp_proxy_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_ocsp_proxy_add_variables(ngx_conf_t *cf);
@@ -73,8 +69,9 @@ static char *ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *
 static ngx_http_output_body_filter_pt ngx_http_next_body_filter;
 
 static ngx_str_t  ngx_http_ocsp_serial = ngx_string("ocsp_serial");
-static ngx_str_t  ngx_http_ocsp_skip_caching = ngx_string("ocsp_response_skip_caching");
+static ngx_str_t  ngx_http_ocsp_skip_caching = ngx_string("ocsp_skip_cache");
 static ngx_str_t  ngx_http_ocsp_delta = ngx_string("ocsp_response_cache_time");
+static ngx_str_t  ngx_http_ocsp_request = ngx_string("ocsp_request");
 
 static ngx_command_t  ngx_http_ocsp_proxy_filter_commands[] = {
     { ngx_string("ocsp_proxy"),
@@ -82,6 +79,14 @@ static ngx_command_t  ngx_http_ocsp_proxy_filter_commands[] = {
       ngx_conf_set_flag_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_ocsp_proxy_conf_t, enable),
+      NULL },
+
+
+    { ngx_string("ocsp_cache_timeout"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_ocsp_proxy_conf_t, max_cache_time),
       NULL },
 
       ngx_null_command
@@ -129,7 +134,7 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
     ngx_int_t                        rc = NGX_HTTP_BAD_REQUEST;
     ngx_str_t                        b64req;
     ngx_str_t                        rreq;
-    size_t                           len;
+    size_t                           b64len, len;
 
     conf = ngx_http_get_module_loc_conf(r->main, ngx_http_ocsp_proxy_filter_module);
     if (!conf->enable || r->internal) {
@@ -167,25 +172,39 @@ ngx_http_ocsp_proxy_handler(ngx_http_request_t *r)
             }
         }
 
-        len = last - start;
-        if (len <= 0) {
+        b64len = last - start;
+        if (b64len <= 0) {
             return rc;
         }
 
         src = start;
 
-        b64req.data = (u_char *) ngx_pcalloc(r->pool, len);
-        dst = b64req.data;
-        ngx_unescape_uri(&dst, &src, len, NGX_UNESCAPE_URI);
-        b64req.len = len;
+        b64req.data = (u_char *) ngx_pcalloc(r->pool, b64len);
+        if (b64req.data == NULL) {
+            return NGX_ERROR;
+        }
 
-        /* XXX: too big? */
+        dst = b64req.data;
+        ngx_unescape_uri(&dst, &src, b64len, NGX_UNESCAPE_URI);
+        b64req.len = b64len;
+
+        len = ngx_base64_decoded_length(b64len);
+        if (len <= 0) {
+            return rc;
+        }
+
         rreq.data = (u_char *) ngx_pcalloc(r->pool, len);
-        rreq.len = len;
+        if (rreq.data == NULL) {
+            return NGX_ERROR;
+        }
 
         if (ngx_decode_base64(&rreq, &b64req) != NGX_OK) {
             return rc;
         }
+
+        ctx->ocsp_request.data = (u_char *) ngx_pcalloc(r->pool, rreq.len);
+        ngx_memcpy(ctx->ocsp_request.data, rreq.data, rreq.len);
+        ctx->ocsp_request.len = rreq.len;
 
         /* handle ocsp req here */
         if (process_ocsp_request(r, rreq.data, rreq.len) != NGX_OK) {
@@ -332,28 +351,34 @@ ngx_http_ocsp_request_get_delta_variable(ngx_http_request_t *r,
         return NGX_OK;
     }
 
-
     ctx = ngx_http_get_module_ctx(r, ngx_http_ocsp_proxy_filter_module);
     if (ctx == NULL) {
         v->not_found = 1;
         return NGX_OK;
     }
 
-    if (ctx->delta <= 0) {
-        v->not_found = 1;
-        return NGX_OK;
-    }
-
-    v->data = ngx_pnalloc(r->pool, max_cache_time_len);
+    v->data = ngx_pnalloc(r->pool, NGX_TIME_T_LEN);
     if (v->data == NULL) {
         return NGX_ERROR;
     }
 
-    if (ctx->delta > max_cache_time) {
-        v->len = ngx_sprintf(v->data, "%ui", max_cache_time) - v->data;
-    } else {
-        v->len = ngx_sprintf(v->data, "%ui", ctx->delta) - v->data;
+    if (ctx->skip_caching == 1 || ctx->delta == 0) {
+        ngx_memcpy(v->data, "0", 1);
+        v->len = 1;
+        goto complete;
     }
+
+    if (ctx->delta > conf->max_cache_time) {
+        v->len = ngx_sprintf(v->data, "%T", (time_t) conf->max_cache_time / 1000) - v->data;
+    } else {
+        v->len = ngx_sprintf(v->data, "%T", (time_t) ctx->delta / 1000) - v->data;
+    }
+
+complete:
+
+    v->valid = 1;
+    v->no_cacheable = 1;
+    v->not_found = 0;
 
     return NGX_OK;
 }
@@ -363,8 +388,6 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
 {
     u_char              *data1;
     char                *data2;
-
-    /* XXX: not RFC compliant!? */
 
     /* required */
     if (!src->hashAlgorithm || !src->hashAlgorithm->algorithm
@@ -384,7 +407,6 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "OCSP no serial specified");
         return NGX_ERROR;
     }
-
 
     dst->hashAlgorithm = (X509_ALGOR *) ngx_pcalloc(r->pool, sizeof(X509_ALGOR));
     if (dst->hashAlgorithm == NULL) {
@@ -455,7 +477,6 @@ copy_ocsp_certid(ngx_http_request_t *r, OCSP_CERTID *dst, OCSP_CERTID *src)
         ngx_memcpy(dst->issuerKeyHash->data, src->issuerKeyHash->data, src->issuerKeyHash->length);
     }
 
-
     dst->serialNumber = (ASN1_INTEGER *) ngx_pcalloc(r->pool, sizeof(ASN1_INTEGER));
     if (dst->serialNumber == NULL) {
         return NGX_ERROR;
@@ -479,19 +500,25 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
 #endif
     u_char                      *d;
     ngx_http_ocsp_proxy_ctx_t   *ctx;
-    OCSP_REQUEST        *ocsp = NULL;
-    OCSP_REQINFO        *inf = NULL;
-    OCSP_ONEREQ         *one = NULL;
-    OCSP_CERTID         *cid = NULL;
-    BIGNUM              *bnser = NULL;
-    char                *serial = NULL;
-
+    OCSP_REQUEST                *ocsp;
+    OCSP_REQINFO                *inf;
+    OCSP_ONEREQ                 *one;
+    OCSP_CERTID                 *cid;
+    BIGNUM                      *bnser;
+    char                        *serial;
+    size_t                      slen;
+    int                         n;
 
     ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "process_ocsp_request");
 
     ctx = ngx_http_get_module_ctx(r, ngx_http_ocsp_proxy_filter_module);
     if (ctx == NULL) {
         return NGX_ERROR;
+    }
+
+    if (ctx->serial.len > 0) {
+        /* request was already processed */
+        return NGX_OK;
     }
 
     d = buf;
@@ -509,6 +536,15 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "OCSP request format error");
         goto error;
+    }
+
+    /* Check if there is service locator ext in the request */
+    n = OCSP_REQUEST_get_ext_by_NID(ocsp, NID_id_pkix_OCSP_serviceLocator, -1);
+    if (n >= 0) {
+        /* If there is service locator extension - we should not cache response on this request */
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                      "got OCSP request with service locator extension");
+        ctx->skip_caching = 1;
     }
 
     inf = ocsp->tbsRequest;
@@ -552,8 +588,8 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
         goto error;
     }
 
-    len = BN_num_bytes(bnser) * 2;
-    if (len <= 0) {
+    slen = BN_num_bytes(bnser) * 2;
+    if (slen <= 0) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "OCSP request format error, serial len <= 0");
         goto error;
@@ -566,12 +602,12 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
         goto error;
     }
 
-    ctx->serial.data = (u_char *) ngx_pcalloc(r->pool, len);
+    ctx->serial.data = (u_char *) ngx_pcalloc(r->pool, slen);
     if (ctx->serial.data == NULL) {
         goto error;
     }
-    ngx_memcpy(ctx->serial.data, serial, len);
-    ctx->serial.len = len;
+    ngx_memcpy(ctx->serial.data, serial, slen);
+    ctx->serial.len = slen;
 
     BN_free(bnser);
     OPENSSL_free(serial);
@@ -580,6 +616,11 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
     return NGX_OK;
 
 error:
+
+    if (ctx->ocsp_request.len > 0) {
+        /* will nginx free the buf? */
+        ctx->ocsp_request.len = 0;
+    }
 
     if (bnser) {
         BN_free(bnser);
@@ -594,6 +635,147 @@ error:
     return NGX_ERROR;
 }
 
+static ngx_int_t
+ngx_http_ocsp_proxy_process_post_body(ngx_http_request_t *r) {
+    ngx_http_ocsp_proxy_ctx_t   *ctx;
+    ngx_buf_t                   *b;
+    u_char                      *p, *buf, *last;
+    size_t                      len;
+    ngx_chain_t                 *cl;
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_ocsp_proxy_filter_module);
+    if (ctx == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (r->method != NGX_HTTP_POST) {
+        return NGX_ERROR;
+    }
+
+    if (r->request_body == NULL || r->request_body->bufs == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (r->request_body->bufs->next != NULL) {
+        /* more than one buffer...we should copy the data out... */
+        len = 0;
+        for (cl = r->request_body->bufs; cl; cl = cl->next) {
+            b = cl->buf;
+
+            if (b->in_file) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                            "OCSP proxy: in-file buffer found. aborted. "
+                            "Too big OCSP request found.");
+                return NGX_ERROR;
+            }
+
+            len += b->last - b->pos;
+        }
+
+        if (len == 0) {
+            return NGX_ERROR;
+        }
+
+        buf = ngx_palloc(r->pool, len);
+        if (buf == NULL) {
+            return NGX_ERROR;
+        }
+
+        p = buf;
+        last = p + len;
+
+        for (cl = r->request_body->bufs; cl; cl = cl->next) {
+            p = ngx_copy(p, cl->buf->pos, cl->buf->last - cl->buf->pos);
+        }
+    } else {
+        b = r->request_body->bufs->buf;
+        if (ngx_buf_size(b) == 0) {
+            return NGX_ERROR;
+        }
+
+        buf = b->pos;
+        last = b->last;
+    }
+
+    len = last-buf;
+
+    ctx->ocsp_request.data = (u_char *) ngx_pcalloc(r->pool, len);
+    if (ctx->ocsp_request.data == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_memcpy(ctx->ocsp_request.data, buf, len);
+    ctx->ocsp_request.len = len;
+
+    return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_ocsp_request_get_b64encoded_variable(ngx_http_request_t *r,
+    ngx_http_variable_value_t *v, uintptr_t data)
+{
+    ngx_http_ocsp_proxy_ctx_t   *ctx;
+    ngx_http_ocsp_proxy_conf_t  *conf;
+    ngx_str_t                   rreq;
+    size_t                      b64len;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_request_get_b64encoded_variable");
+
+    conf = ngx_http_get_module_loc_conf(r->main, ngx_http_ocsp_proxy_filter_module);
+    if (!conf->enable) {
+        v->not_found = 1;
+        return NGX_OK;
+    }
+
+    ctx = ngx_http_get_module_ctx(r, ngx_http_ocsp_proxy_filter_module);
+    if (ctx == NULL) {
+        v->not_found = 1;
+        return NGX_OK;
+    }
+
+    if (ctx->ocsp_request.len > 0) {
+        goto complete;
+    }
+
+    if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
+        v->not_found = 1;
+        return NGX_OK;
+    }
+
+complete:
+
+    /*
+        base64 encoding is much cheaper than request validation,
+        so we just encode POST request data to var, be careful with it
+    */
+
+    b64len = ngx_base64_encoded_length(ctx->ocsp_request.len);
+    if (b64len <= 0 || b64len < ctx->ocsp_request.len) {
+        return NGX_ERROR;
+    }
+
+    rreq.data = (u_char *) ngx_pcalloc(r->pool, b64len);
+    if (rreq.data == NULL) {
+        return NGX_ERROR;
+    }
+
+    v->data = (u_char *) ngx_pcalloc(r->pool, b64len);
+    if (v->data == NULL) {
+        return NGX_ERROR;
+    }
+
+    v->valid = 1;
+    v->no_cacheable = 0;
+    v->not_found = 0;
+
+    ngx_encode_base64(&rreq, &ctx->ocsp_request);
+    ngx_memcpy(v->data, rreq.data, rreq.len);
+    v->len = rreq.len;
+
+    return NGX_OK;
+}
+
+
 
 static ngx_int_t
 ngx_http_ocsp_request_get_serial_variable(ngx_http_request_t *r,
@@ -601,10 +783,6 @@ ngx_http_ocsp_request_get_serial_variable(ngx_http_request_t *r,
 {
     ngx_http_ocsp_proxy_ctx_t   *ctx;
     ngx_http_ocsp_proxy_conf_t  *conf;
-    ngx_buf_t                   *b;
-    u_char                      *p, *buf, *last;
-    size_t                      len = 0;
-    ngx_chain_t                 *cl;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_request_get_serial_variable");
 
@@ -622,80 +800,24 @@ ngx_http_ocsp_request_get_serial_variable(ngx_http_request_t *r,
 
     /* was serial already set in this ctx? */
     if (ctx->serial.len > 0) {
-        v->data = (u_char *) ngx_pcalloc(r->pool, ctx->serial.len);
-        if (v->data == NULL) {
-            return NGX_ERROR;
-        }
-
-        v->valid = 1;
-        v->no_cacheable = 0;
-        v->not_found = 0;
-
-        ngx_memcpy(v->data, ctx->serial.data, ctx->serial.len);
-        v->len = ctx->serial.len;
-        return NGX_OK;
+        goto complete;
     }
 
-    if (r->request_body == NULL || r->request_body->bufs == NULL) {
+    if (ngx_http_ocsp_proxy_process_post_body(r) != NGX_OK) {
         v->not_found = 1;
         return NGX_OK;
     }
 
-    if (r->request_body->bufs->next != NULL) {
-        /* more than one buffer...we should copy the data out... */
-        len = 0;
-        for (cl = r->request_body->bufs; cl; cl = cl->next) {
-            b = cl->buf;
-
-            if (b->in_file) {
-                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "OCSP proxy: in-file buffer found. aborted. "
-                        "Too big OCSP request found.");
-                v->not_found = 1;
-                return NGX_OK;
-            }
-
-            len += b->last - b->pos;
-        }
-
-        if (len == 0) {
-            v->not_found = 1;
-            return NGX_OK;
-        }
-
-        buf = ngx_palloc(r->pool, len);
-        if (buf == NULL) {
-            return NGX_ERROR;
-        }
-
-        p = buf;
-        last = p + len;
-
-        for (cl = r->request_body->bufs; cl; cl = cl->next) {
-            p = ngx_copy(p, cl->buf->pos, cl->buf->last - cl->buf->pos);
-        }
-
-    } else {
-        b = r->request_body->bufs->buf;
-        if (ngx_buf_size(b) == 0) {
-            v->not_found = 1;
-            return NGX_OK;
-        }
-
-        buf = b->pos;
-        last = b->last;
-    }
-
-    len = last-buf;
-
-    if (process_ocsp_request(r, buf, len) != NGX_OK) {
+    if (process_ocsp_request(r, ctx->ocsp_request.data, ctx->ocsp_request.len) != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                        "OCSP proxy: request processing error");
+                    "OCSP proxy: request processing error");
         v->not_found = 1;
         return NGX_OK;
     }
 
-    v->data = (u_char *) ngx_pcalloc(r->pool, len);
+complete:
+
+    v->data = (u_char *) ngx_pcalloc(r->pool, ctx->serial.len);
     if (v->data == NULL) {
         return NGX_ERROR;
     }
@@ -748,18 +870,18 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
 #if OPENSSL_VERSION_NUMBER >= 0x0090707fL
     const
 #endif
-    u_char              *d;
+    u_char                      *d;
     ngx_http_ocsp_proxy_conf_t  *conf;
     ngx_http_ocsp_proxy_ctx_t   *ctx;
-    u_char              *p, *buf, *last;
-    size_t              len = 0;
-    ngx_chain_t         *cl;
-    ngx_buf_t           *b;
-    int                   n, delta;
-    OCSP_RESPONSE         *ocsp = NULL;
-    OCSP_BASICRESP        *basic = NULL;
-    ASN1_GENERALIZEDTIME  *thisupdate, *nextupdate;
-    time_t                now, t_tmp;
+    u_char                      *p, *buf, *last;
+    size_t                      len;
+    ngx_chain_t                 *cl;
+    ngx_buf_t                   *b;
+    int                         n, delta;
+    OCSP_RESPONSE               *ocsp;
+    OCSP_BASICRESP              *basic;
+    ASN1_GENERALIZEDTIME        *thisupdate, *nextupdate;
+    time_t                      now, t_tmp;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_proxy_handle_response");
 
@@ -779,8 +901,9 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
         return ngx_http_next_body_filter(r, in);
     }
 
-    if (ctx->cid == NULL || ctx->skip_caching == 1) {
-        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_proxy_handle_response skipping caching");
+    if (ctx->cid == NULL) {
+        /* wtf? */
+        ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_proxy_handle_response invalid request");
         return ngx_http_next_body_filter(r, in);
     }
 
@@ -880,30 +1003,33 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
         goto error;
     }
 
+    if (nextupdate) {
+        now = ngx_time();
+        t_tmp = ASN1_GetTimeT(nextupdate);
+        delta = difftime(now, t_tmp);
 
-    now = ngx_time();
-    t_tmp = ASN1_GetTimeT(nextupdate);
-    delta = difftime(now, t_tmp);
+        /* store response until nextupdate - TIME_BUF */
+        if (delta > 0 || (delta + TIME_BUF) >= 0) {
+            /* wtf? */
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "OCSP response exp datetime in the past or format error");
+            goto error;
+        }
 
-    /* store response until nextupdate - TIME_BUF */
-    if (delta > 0 || (delta + TIME_BUF) >= 0) {
-        /* wtf? */
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
-                      "OCSP response exp datetime in the past or format error");
-        goto error;
-    }
-
-    delta = delta * -1;
-    if (delta > max_cache_time) {
-        delta = max_cache_time;
+        delta = delta * -1 * 1000;
+        if ((ngx_msec_t) delta > conf->max_cache_time) {
+            ctx->delta = conf->max_cache_time;
+        }
+        ctx->delta = (ngx_msec_t) delta;
+    } else {
+        ctx->delta = conf->max_cache_time;
     }
 
 #if DDEBUG
-    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "delta: %d, serial: %v", delta, &ctx->serial);
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "delta: %d, serial: %v", ctx->delta, &ctx->serial);
 #endif
 
     ctx->valid = 1;
-    ctx->delta = delta;
 
     OCSP_BASICRESP_free(basic);
 
@@ -948,6 +1074,12 @@ ngx_http_ocsp_proxy_add_variables(ngx_conf_t *cf)
     }
     var->get_handler = ngx_http_ocsp_request_get_delta_variable;
 
+    var = ngx_http_add_variable(cf, &ngx_http_ocsp_request, NGX_HTTP_VAR_NOHASH);
+    if (var == NULL) {
+        return NGX_ERROR;
+    }
+    var->get_handler = ngx_http_ocsp_request_get_b64encoded_variable;
+
     return NGX_OK;
 }
 
@@ -967,6 +1099,7 @@ ngx_http_ocsp_proxy_create_conf(ngx_conf_t *cf)
      */
 
     conf->enable = NGX_CONF_UNSET;
+    conf->max_cache_time = NGX_CONF_UNSET_MSEC;
 
     return conf;
 }
@@ -979,6 +1112,10 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_ocsp_proxy_conf_t *conf = child;
 
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
+
+    /* default max_cache_time = 3600 * 24 * 7 */
+    ngx_conf_merge_msec_value(conf->max_cache_time,
+                              prev->max_cache_time, 604800 * 1000);
 
     return NGX_CONF_OK;
 }

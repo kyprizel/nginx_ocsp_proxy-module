@@ -1,5 +1,5 @@
 /*
-    v0.03
+    v0.04
 
     Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
@@ -755,12 +755,16 @@ ngx_http_ocsp_request_get_b64encoded_variable(ngx_http_request_t *r,
         }
     }
 
-complete:
+    if (!ctx->cid || ctx->serial.len == 0) {
+        if (process_ocsp_request(r, ctx->ocsp_request.data, ctx->ocsp_request.len) != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                        "OCSP proxy: request processing error");
+            v->not_found = 1;
+            return NGX_OK;
+        }
+    }
 
-    /*
-        base64 encoding is much cheaper than request validation,
-        so we just encode POST request data to var, be careful with it
-    */
+complete:
 
     b64len = ngx_base64_encoded_length(ctx->ocsp_request.len);
     if (b64len <= 0 || b64len < ctx->ocsp_request.len) {
@@ -992,7 +996,6 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
                       "got OCSP response with nonce");
 
         ctx->skip_caching = 1;
-        goto error;
     }
 
     if (OCSP_resp_find_status(basic, ctx->cid, &n, NULL, NULL,

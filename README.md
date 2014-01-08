@@ -3,6 +3,7 @@ Description
 
 **nginx_ocsp_proxy-module** - module for OCSP request and response processing designed to allow response caching using
 [srcache-nginx-module](https://github.com/agentzh/srcache-nginx-module) and [memc-nginx-module](https://github.com/agentzh/memc-nginx-module).
+If you want to use standart caching mechanisms module could help you rewrite POST OCSP requests to GET.
 
 Status
 ======
@@ -132,6 +133,33 @@ Example configuration
     }
 
 
+Example configuration 2
+=======================
+
+    server {
+        ...
+
+        location / {
+            ocsp_proxy on;
+
+            if ($request_method = "POST") {
+                rewrite ^(.*)$ $1$ocsp_request break;
+            }
+
+            proxy_method GET;
+            proxy_pass_request_body off;
+
+            proxy_set_header Content-Length "";
+            proxy_set_header Content-Type "";
+
+            proxy_cache_key "$proxy_host$ocsp_serial$request_uri";
+
+            ...
+
+            proxy_pass http://ocsp.someca.com;
+            proxy_ignore_client_abort on;
+        }
+    }
 
 Installation
 ============

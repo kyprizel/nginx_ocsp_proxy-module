@@ -1132,9 +1132,9 @@ ngx_http_ocsp_proxy_merge_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_value(conf->enable, prev->enable, 0);
 
-    /* default max_cache_time = 3600 * 24 * 7 */
+    /* default max_cache_time = 3600 * 24 */
     ngx_conf_merge_value(conf->max_cache_time,
-                              prev->max_cache_time, 604800);
+                              prev->max_cache_time, 86400);
 
     return NGX_CONF_OK;
 }

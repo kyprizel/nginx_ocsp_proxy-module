@@ -32,9 +32,9 @@ off - Disable module
 
 ocsp_cache_timeout
 ------------------
-**syntax:** *ocsp_cache_timeout 7d;*
+**syntax:** *ocsp_cache_timeout 1h;*
 
-**default:** *7 days*
+**default:** *24 hrs*
 
 **context:** *http, server, location, if*
 

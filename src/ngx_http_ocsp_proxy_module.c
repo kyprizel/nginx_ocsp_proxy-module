@@ -779,10 +779,11 @@ complete:
     }
 
     ngx_encode_base64(&rreq, &ctx->ocsp_request);
+#if 0
     escape = 2 * ngx_escape_uri(NULL, &rreq, rreq.len, NGX_ESCAPE_URI_COMPONENT);
 
     b64len = rreq.len + escape;
-
+#endif
     v->data = (u_char *) ngx_pcalloc(r->pool, b64len);
     if (v->data == NULL) {
         return NGX_ERROR;
@@ -791,13 +792,17 @@ complete:
     v->valid = 1;
     v->no_cacheable = 0;
     v->not_found = 0;
-
+#if 0
     if (escape == 0) {
         p = (u_char *) ngx_cpymem(v->data, rreq.data, rreq.len);
     } else {
         p = (u_char *) ngx_escape_uri(v->data, rreq.data, rreq.len, NGX_ESCAPE_URI_COMPONENT);
     }
     v->len = p - v->data;
+#else
+    ngx_cpymem(v->data, rreq.data, rreq.len);
+    v->len = rreq.len;
+#endif
 
     return NGX_OK;
 }

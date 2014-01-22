@@ -1,5 +1,5 @@
 /*
-    v0.04
+    v0.05
 
     Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
@@ -728,6 +728,8 @@ ngx_http_ocsp_request_get_b64encoded_variable(ngx_http_request_t *r,
     ngx_http_ocsp_proxy_conf_t  *conf;
     ngx_str_t                   rreq;
     size_t                      b64len;
+    uintptr_t                   escape;
+    u_char                      *p;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_request_get_b64encoded_variable");
 
@@ -776,6 +778,11 @@ complete:
         return NGX_ERROR;
     }
 
+    ngx_encode_base64(&rreq, &ctx->ocsp_request);
+    escape = 2 * ngx_escape_uri(NULL, &rreq, rreq.len, NGX_ESCAPE_URI_COMPONENT);
+
+    b64len = rreq.len + escape;
+
     v->data = (u_char *) ngx_pcalloc(r->pool, b64len);
     if (v->data == NULL) {
         return NGX_ERROR;
@@ -785,9 +792,12 @@ complete:
     v->no_cacheable = 0;
     v->not_found = 0;
 
-    ngx_encode_base64(&rreq, &ctx->ocsp_request);
-    ngx_memcpy(v->data, rreq.data, rreq.len);
-    v->len = rreq.len;
+    if (escape == 0) {
+        p = (u_char *) ngx_cpymem(v->data, rreq.data, rreq.len);
+    } else {
+        p = (u_char *) ngx_escape_uri(v->data, rreq.data, rreq.len, NGX_ESCAPE_URI_COMPONENT);
+    }
+    v->len = p - v->data;
 
     return NGX_OK;
 }
@@ -898,8 +908,8 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
     ngx_chain_t                 *cl;
     ngx_buf_t                   *b;
     int                         n, delta;
-    OCSP_RESPONSE               *ocsp;
-    OCSP_BASICRESP              *basic;
+    OCSP_RESPONSE               *ocsp = NULL;
+    OCSP_BASICRESP              *basic = NULL;
     ASN1_GENERALIZEDTIME        *thisupdate, *nextupdate;
     time_t                      now, t_tmp, timedelta;
 
@@ -1066,7 +1076,7 @@ error:
         OCSP_RESPONSE_free(ocsp);
     }
 
-    return NGX_ERROR;
+    return ngx_http_next_body_filter(r, in);
 }
 
 

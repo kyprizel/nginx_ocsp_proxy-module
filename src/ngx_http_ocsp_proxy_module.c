@@ -1,5 +1,5 @@
 /*
-    v0.05
+    v0.06
 
     Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
@@ -508,12 +508,12 @@ process_ocsp_request(ngx_http_request_t *r, u_char *buf, size_t len)
 #endif
     u_char                      *d;
     ngx_http_ocsp_proxy_ctx_t   *ctx;
-    OCSP_REQUEST                *ocsp;
-    OCSP_REQINFO                *inf;
-    OCSP_ONEREQ                 *one;
-    OCSP_CERTID                 *cid;
-    BIGNUM                      *bnser;
-    char                        *serial;
+    OCSP_REQUEST                *ocsp = NULL;
+    OCSP_REQINFO                *inf = NULL;
+    OCSP_ONEREQ                 *one = NULL;
+    OCSP_CERTID                 *cid = NULL;
+    BIGNUM                      *bnser = NULL;
+    char                        *serial = NULL;
     size_t                      slen;
     int                         n;
 
@@ -917,7 +917,8 @@ ngx_http_ocsp_proxy_handle_response(ngx_http_request_t *r, ngx_chain_t *in)
     int                         n, delta;
     OCSP_RESPONSE               *ocsp = NULL;
     OCSP_BASICRESP              *basic = NULL;
-    ASN1_GENERALIZEDTIME        *thisupdate, *nextupdate;
+    ASN1_GENERALIZEDTIME        *thisupdate = NULL;
+    ASN1_GENERALIZEDTIME        *nextupdate = NULL;
     time_t                      now, t_tmp, timedelta;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_proxy_handle_response");

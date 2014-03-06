@@ -728,8 +728,10 @@ ngx_http_ocsp_request_get_b64encoded_variable(ngx_http_request_t *r,
     ngx_http_ocsp_proxy_conf_t  *conf;
     ngx_str_t                   rreq;
     size_t                      b64len;
+#if 0
     uintptr_t                   escape;
     u_char                      *p;
+#endif
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "ngx_http_ocsp_request_get_b64encoded_variable");
 

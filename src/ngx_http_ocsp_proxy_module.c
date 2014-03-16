@@ -802,7 +802,7 @@ complete:
     }
     v->len = p - v->data;
 #else
-    ngx_cpymem(v->data, rreq.data, rreq.len);
+    ngx_memcpy(v->data, rreq.data, rreq.len);
     v->len = rreq.len;
 #endif
 

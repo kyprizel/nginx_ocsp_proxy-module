@@ -1,5 +1,5 @@
 /*
-    v0.06
+    v0.07
 
     Copyright (C) 2013-2014 Eldar Zaitov (eldar@kyprizel.net).
     All rights reserved.
@@ -878,7 +878,11 @@ ASN1_GetTimeT(ASN1_TIME* time)
 
     memset(&t, 0, sizeof(t));
 
-    if (time->length < 14) {
+    if (time->type == V_ASN1_GENERALIZEDTIME && time->length < 14) {
+        goto complete;
+    }
+
+    if (time->type == V_ASN1_UTCTIME && time->length < 12) {
         goto complete;
     }
 
